@@ -251,42 +251,47 @@ else
 fi
 STATUS["Oh My Zsh"]="$([ -d "$HOME/.oh-my-zsh" ] && echo '✔' || echo '✘')"
 
-# ---- Powerlevel10k ----
-step "Powerlevel10k 主题"
-P10K_DIR="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/themes/powerlevel10k"
-if [[ -d "$P10K_DIR" ]]; then
-    skip "Powerlevel10k 已存在"
-else
-    if git_proxy_clone --depth=1 https://github.com/romkatv/powerlevel10k.git "$P10K_DIR" 2>/dev/null; then
-        ok "Powerlevel10k 安装完成"
+if [[ -d "$HOME/.oh-my-zsh" ]]; then
+    # ---- Powerlevel10k ----
+    step "Powerlevel10k 主题"
+    P10K_DIR="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/themes/powerlevel10k"
+    if [[ -d "$P10K_DIR" ]]; then
+        skip "Powerlevel10k 已存在"
     else
-        fail "Powerlevel10k 安装失败"
-    fi
-fi
-STATUS["Powerlevel10k"]="$([ -d "$P10K_DIR" ] && echo '✔' || echo '✘')"
-
-# ---- Zsh 插件 ----
-step "Zsh 插件"
-ZSH_CUSTOM_DIR="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}"
-
-declare -A ZSH_PLUGINS=(
-    ["zsh-completions"]="https://github.com/zsh-users/zsh-completions"
-    ["zsh-autosuggestions"]="https://github.com/zsh-users/zsh-autosuggestions"
-    ["zsh-syntax-highlighting"]="https://github.com/zsh-users/zsh-syntax-highlighting"
-)
-
-for name in zsh-completions zsh-autosuggestions zsh-syntax-highlighting; do
-    dest="$ZSH_CUSTOM_DIR/plugins/$name"
-    if [[ -d "$dest" ]]; then
-        skip "$name"
-    else
-        if git_proxy_clone --depth=1 "${ZSH_PLUGINS[$name]}" "$dest" 2>/dev/null; then
-            ok "$name"
+        if git_proxy_clone --depth=1 https://github.com/romkatv/powerlevel10k.git "$P10K_DIR" 2>/dev/null; then
+            ok "Powerlevel10k 安装完成"
         else
-            fail "$name"
+            fail "Powerlevel10k 安装失败"
         fi
     fi
-done
+    STATUS["Powerlevel10k"]="$([ -d "$P10K_DIR" ] && echo '✔' || echo '✘')"
+
+    # ---- Zsh 插件 ----
+    step "Zsh 插件"
+    ZSH_CUSTOM_DIR="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}"
+
+    declare -A ZSH_PLUGINS=(
+        ["zsh-completions"]="https://github.com/zsh-users/zsh-completions"
+        ["zsh-autosuggestions"]="https://github.com/zsh-users/zsh-autosuggestions"
+        ["zsh-syntax-highlighting"]="https://github.com/zsh-users/zsh-syntax-highlighting"
+    )
+
+    for name in zsh-completions zsh-autosuggestions zsh-syntax-highlighting; do
+        dest="$ZSH_CUSTOM_DIR/plugins/$name"
+        if [[ -d "$dest" ]]; then
+            skip "$name"
+        else
+            if git_proxy_clone --depth=1 "${ZSH_PLUGINS[$name]}" "$dest" 2>/dev/null; then
+                ok "$name"
+            else
+                fail "$name"
+            fi
+        fi
+    done
+else
+    warn "Oh My Zsh 未就绪，跳过 Powerlevel10k 和 Zsh 插件安装"
+    STATUS["Powerlevel10k"]="✘"
+fi
 
 # ---- .zshrc ----
 step "配置 ~/.zshrc"
@@ -390,36 +395,38 @@ if $tmux_need_install; then
 
     tar -xzf "$WORK_DIR/tmux-${TMUX_VER}.tar.gz" -C "$WORK_DIR"
 
-    pushd "$WORK_DIR/tmux-${TMUX_VER}" > /dev/null || { fail "进入 tmux 源码目录失败"; }
+    if pushd "$WORK_DIR/tmux-${TMUX_VER}" > /dev/null; then
+        # configure
+        ./configure > "$WORK_DIR/configure.log" 2>&1 &
+        cfg_pid=$!
+        spinner "$cfg_pid" "配置编译环境 (./configure)..."
+        if wait "$cfg_pid"; then
+            ok "配置完成"
+        else
+            fail "配置失败，日志: $WORK_DIR/configure.log"
+        fi
 
-    # configure
-    ./configure > "$WORK_DIR/configure.log" 2>&1 &
-    cfg_pid=$!
-    spinner "$cfg_pid" "配置编译环境 (./configure)..."
-    if wait "$cfg_pid"; then
-        ok "配置完成"
+        # make
+        make -j"$(nproc)" > "$WORK_DIR/make.log" 2>&1 &
+        make_pid=$!
+        spinner "$make_pid" "编译 tmux（可能需要 1-3 分钟）..."
+        if wait "$make_pid"; then
+            ok "编译完成"
+        else
+            fail "编译失败，日志: $WORK_DIR/make.log"
+        fi
+
+        # install
+        sudo make install > /dev/null 2>&1
+        popd > /dev/null
+
+        if cmd_exists tmux && [[ "$(tmux -V 2>/dev/null | awk '{print $2}')" == "$TMUX_VER" ]]; then
+            ok "Tmux ${TMUX_VER} 安装成功"
+        else
+            fail "Tmux 安装可能不完整，请手动检查"
+        fi
     else
-        fail "配置失败，日志: $WORK_DIR/configure.log"
-    fi
-
-    # make
-    make -j"$(nproc)" > "$WORK_DIR/make.log" 2>&1 &
-    make_pid=$!
-    spinner "$make_pid" "编译 tmux（可能需要 1-3 分钟）..."
-    if wait "$make_pid"; then
-        ok "编译完成"
-    else
-        fail "编译失败，日志: $WORK_DIR/make.log"
-    fi
-
-    # install
-    sudo make install > /dev/null 2>&1
-    popd > /dev/null
-
-    if cmd_exists tmux && [[ "$(tmux -V 2>/dev/null | awk '{print $2}')" == "$TMUX_VER" ]]; then
-        ok "Tmux ${TMUX_VER} 安装成功"
-    else
-        fail "Tmux 安装可能不完整，请手动检查"
+        fail "进入 tmux 源码目录失败，跳过编译"
     fi
 fi
 STATUS["Tmux"]="$(tmux -V 2>/dev/null | awk '{print $2}' || echo '✘')"
@@ -430,6 +437,7 @@ TPM_DIR="$HOME/.tmux/plugins/tpm"
 if [[ -d "$TPM_DIR" ]]; then
     skip "TPM 已存在"
 else
+    mkdir -p "$HOME/.tmux/plugins"
     if git_proxy_clone --depth=1 https://github.com/tmux-plugins/tpm "$TPM_DIR" 2>/dev/null; then
         ok "TPM 安装完成"
     else
