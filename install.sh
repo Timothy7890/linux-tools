@@ -193,8 +193,8 @@ fi
 
 # ---- 基础依赖 ----
 step "安装基础依赖 (wget / curl / unzip)"
-run_quiet "apt update" sudo apt-get update -qq
-sudo apt-get install -y -qq wget curl unzip > /dev/null 2>&1
+run_quiet "apt update" sudo -E apt-get update -qq
+sudo -E apt-get install -y -qq wget curl unzip > /dev/null 2>&1
 ok "基础依赖就绪"
 
 # ####################################################################
@@ -214,14 +214,14 @@ fi
 
 if $need_git_upgrade; then
     info "Ubuntu ${UBUNTU_VER} 检测到旧版本系统，通过 PPA 升级 Git..."
-    sudo apt-get install -y -qq software-properties-common > /dev/null 2>&1
-    sudo add-apt-repository -y ppa:git-core/ppa > /dev/null 2>&1
-    run_quiet "升级 Git" sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git
+    sudo -E apt-get install -y -qq software-properties-common > /dev/null 2>&1
+    sudo -E add-apt-repository -y ppa:git-core/ppa > /dev/null 2>&1
+    run_quiet "升级 Git" sudo -E DEBIAN_FRONTEND=noninteractive apt-get install -y git
 else
     if cmd_exists git; then
         ok "Git $(git --version | awk '{print $3}') 已安装"
     else
-        run_quiet "安装 Git" sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git
+        run_quiet "安装 Git" sudo -E DEBIAN_FRONTEND=noninteractive apt-get install -y git
     fi
 fi
 STATUS["Git"]="$(git --version 2>/dev/null | awk '{print $3}' || echo '✘')"
@@ -231,7 +231,7 @@ step "Zsh"
 if cmd_exists zsh; then
     ok "Zsh $(zsh --version | awk '{print $2}') 已安装"
 else
-    run_quiet "安装 Zsh" sudo DEBIAN_FRONTEND=noninteractive apt-get install -y zsh
+    run_quiet "安装 Zsh" sudo -E DEBIAN_FRONTEND=noninteractive apt-get install -y zsh
 fi
 STATUS["Zsh"]="$(zsh --version 2>/dev/null | awk '{print $2}' || echo '✘')"
 
@@ -330,7 +330,7 @@ fi
 if $vim_has_clipboard; then
     skip "Vim 已支持 +clipboard"
 else
-    run_quiet "安装 vim-gtk3" sudo DEBIAN_FRONTEND=noninteractive apt-get install -y vim-gtk3
+    run_quiet "安装 vim-gtk3" sudo -E DEBIAN_FRONTEND=noninteractive apt-get install -y vim-gtk3
 fi
 STATUS["Vim"]="$(vim --version 2>/dev/null | head -1 | grep -oP 'Vi IMproved \K[0-9.]+' || echo '✘')"
 
@@ -386,7 +386,7 @@ fi
 
 if $tmux_need_install; then
     info "安装编译依赖..."
-    sudo apt-get install -y -qq libevent-dev ncurses-dev build-essential bison pkg-config > /dev/null 2>&1
+    sudo -E apt-get install -y -qq libevent-dev ncurses-dev build-essential bison pkg-config > /dev/null 2>&1
     ok "编译依赖就绪"
 
     info "下载 tmux-${TMUX_VER} 源码..."
@@ -591,7 +591,7 @@ step "Rsync"
 if cmd_exists rsync; then
     skip "Rsync 已安装"
 else
-    run_quiet "安装 Rsync" sudo DEBIAN_FRONTEND=noninteractive apt-get install -y rsync
+    run_quiet "安装 Rsync" sudo -E DEBIAN_FRONTEND=noninteractive apt-get install -y rsync
 fi
 STATUS["Rsync"]="$(cmd_exists rsync && echo '✔' || echo '✘')"
 
