@@ -553,11 +553,54 @@ desc = "Git (Lazygit)"
 [[mgr.prepend_keymap]]
 on   = [ "R" ]
 run  = '''
-    shell 'tmux split-window -h "rsync -avzP \"$@\" macos-yx:~/Downloads/; echo 传输完成，2秒后关闭...; sleep 2"'
+    shell 'printf "%%s\n" %s > /tmp/yazi_transfer_files && tmux split-window -h "bash ~/.config/yazi/scripts/transfer.sh"'
 '''
-desc = "Tmux 分屏下载"
+desc = "Tmux 分屏传输"
 YAZI_KEY_EOF
 ok "keymap.toml 已写入"
+
+# ---- Yazi 传输脚本 ----
+step "Yazi 传输脚本 (transfer.sh)"
+mkdir -p "$HOME/.config/yazi/scripts"
+backup_if_exists "$HOME/.config/yazi/scripts/transfer.sh"
+cat > "$HOME/.config/yazi/scripts/transfer.sh" << 'YAZI_TRANSFER_EOF'
+#!/bin/bash
+mapfile -t files < /tmp/yazi_transfer_files
+if [ ${#files[@]} -eq 0 ]; then
+    echo "没有选中文件，已取消"; sleep 1; exit 0
+fi
+
+echo "==============================="
+echo "  选择目标服务器"
+echo "==============================="
+echo ""
+echo "  1) macos-yx    ~/Downloads/"
+echo "  2) macmini     /Users/timo_clawd/Transfer/"
+echo "  q) 取消"
+echo ""
+read -p "请选择 [1-2/q]: " choice
+
+case $choice in
+    1) dest="macos-yx:~/Downloads/";               use_scp=false ;;
+    2) dest="macmini:/Users/timo_clawd/Transfer/"; use_scp=false ;;
+    *) echo "已取消"; sleep 1; exit 0 ;;
+esac
+
+echo ""
+echo "→ 目标: $dest"
+echo "→ 文件: ${files[*]}"
+echo ""
+if $use_scp; then
+    scp -r -p "${files[@]}" "$dest"
+else
+    rsync -avzP "${files[@]}" "$dest"
+fi
+echo ""
+echo "传输完成，2秒后关闭..."
+sleep 2
+YAZI_TRANSFER_EOF
+chmod +x "$HOME/.config/yazi/scripts/transfer.sh"
+ok "transfer.sh 已写入"
 
 # ---- Lazygit ----
 step "Lazygit"
