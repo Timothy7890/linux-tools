@@ -1,0 +1,550 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  宇树机器人专用 · 精简工具包一键安装脚本
+#  仅安装: Tmux / Yazi (含 rsync 传输支持)
+# ============================================================================
+
+# ========================= 版本配置（集中管理）=========================
+TMUX_VER="3.6a"
+YAZI_VER="v26.1.22"
+
+# ========================= 颜色与样式 =========================
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+# ========================= 输出函数 =========================
+ok()    { echo -e "  ${GREEN}✔${NC} $1"; }
+fail()  { echo -e "  ${RED}✘${NC} $1"; }
+skip()  { echo -e "  ${YELLOW}⊘${NC} $1 ${DIM}(已跳过)${NC}"; }
+info()  { echo -e "  ${BLUE}ℹ${NC} $1"; }
+warn()  { echo -e "  ${YELLOW}⚠${NC} $1"; }
+
+step() {
+    echo -e "\n${CYAN}${BOLD}  ▸ $1${NC}"
+}
+
+phase() {
+    local w=54
+    echo ""
+    echo -e "${MAGENTA}${BOLD}  ┌$(printf '─%.0s' $(seq 1 $w))┐${NC}"
+    printf "  ${MAGENTA}${BOLD}│${NC} %-$(($w - 1))s${MAGENTA}${BOLD}│${NC}\n" "$1"
+    echo -e "${MAGENTA}${BOLD}  └$(printf '─%.0s' $(seq 1 $w))┘${NC}"
+}
+
+banner() {
+    clear
+    echo ""
+    echo -e "${CYAN}${BOLD}  ╔══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}${BOLD}  ║                                                      ║${NC}"
+    echo -e "${CYAN}${BOLD}  ║      宇树机器人专用  ·  精简工具包安装脚本          ║${NC}"
+    echo -e "${CYAN}${BOLD}  ║                                                      ║${NC}"
+    echo -e "${CYAN}${BOLD}  ║                tmux · yazi                            ║${NC}"
+    echo -e "${CYAN}${BOLD}  ║                                                      ║${NC}"
+    echo -e "${CYAN}${BOLD}  ╚══════════════════════════════════════════════════════╝${NC}"
+    echo ""
+}
+
+# ========================= Spinner（长耗时操作） =========================
+spinner() {
+    local pid=$1 msg="$2"
+    local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+    local i=0
+    tput civis 2>/dev/null
+    while kill -0 "$pid" 2>/dev/null; do
+        printf "\r  ${CYAN}%s${NC} %s" "${frames[$i]}" "$msg"
+        i=$(( (i + 1) % ${#frames[@]} ))
+        sleep 0.1
+    done
+    printf "\r\033[K"
+    tput cnorm 2>/dev/null
+}
+
+run_quiet() {
+    local msg="$1"; shift
+    local log="$WORK_DIR/cmd_$$.log"
+    "$@" > "$log" 2>&1 &
+    local pid=$!
+    spinner "$pid" "$msg"
+    if wait "$pid"; then
+        ok "$msg"
+        return 0
+    else
+        fail "$msg"
+        echo -e "  ${DIM}$(tail -3 "$log" 2>/dev/null)${NC}"
+        return 1
+    fi
+}
+
+# ========================= 工具函数 =========================
+cmd_exists() { command -v "$1" &>/dev/null; }
+
+backup_if_exists() {
+    local f="$1"
+    if [[ -f "$f" ]]; then
+        local bak="${f}.bak.$(date +%Y%m%d_%H%M%S)"
+        cp "$f" "$bak"
+        info "已备份 ${f} → ${bak}"
+    fi
+}
+
+git_proxy_clone() {
+    git -c "http.proxy=http://127.0.0.1:${PROXY_PORT}" \
+        -c "https.proxy=http://127.0.0.1:${PROXY_PORT}" \
+        clone "$@"
+}
+
+# ========================= 状态追踪 =========================
+declare -A STATUS=()
+
+# ========================= 架构检测 =========================
+ARCH=$(uname -m)
+case "$ARCH" in
+    x86_64)  ARCH_TAG="x86_64" ;;
+    aarch64) ARCH_TAG="aarch64" ;;
+    *)
+        echo -e "\n  ${RED}不支持的系统架构: $ARCH${NC}"
+        exit 1
+        ;;
+esac
+
+# ========================= Ubuntu 版本 =========================
+UBUNTU_VER="unknown"
+if [[ -f /etc/os-release ]]; then
+    UBUNTU_VER=$(. /etc/os-release && echo "${VERSION_ID:-unknown}")
+elif cmd_exists lsb_release; then
+    UBUNTU_VER=$(lsb_release -rs 2>/dev/null || echo "unknown")
+fi
+
+# ========================= 临时目录 =========================
+WORK_DIR=$(mktemp -d /tmp/linux-tool-install-XXXXXX)
+cleanup() {
+    kill "$SUDO_KEEPALIVE_PID" 2>/dev/null
+    rm -rf "$WORK_DIR"
+}
+trap cleanup EXIT
+
+# ####################################################################
+#  Phase 0 · 环境检查与用户输入
+# ####################################################################
+banner
+phase "Phase 0 · 环境检查与配置"
+
+# ---- sudo ----
+step "检查 sudo 权限"
+if sudo -n true 2>/dev/null; then
+    ok "sudo 免密可用"
+else
+    info "部分操作需要 sudo，请输入密码"
+    if sudo true; then
+        ok "sudo 验证通过"
+    else
+        fail "无法获取 sudo 权限，脚本终止"
+        exit 1
+    fi
+fi
+
+# 后台保活 sudo
+( while true; do sudo -n true 2>/dev/null; sleep 50; done ) &
+SUDO_KEEPALIVE_PID=$!
+
+info "系统架构: ${BOLD}${ARCH_TAG}${NC}"
+info "Ubuntu 版本: ${BOLD}${UBUNTU_VER}${NC}"
+
+# ---- 代理 ----
+step "代理配置"
+echo -ne "  输入代理端口 ${DIM}(默认 17897，回车使用默认)${NC}: "
+read -r PROXY_PORT
+PROXY_PORT=${PROXY_PORT:-17897}
+
+export http_proxy="http://127.0.0.1:${PROXY_PORT}"
+export https_proxy="http://127.0.0.1:${PROXY_PORT}"
+export all_proxy="socks5://127.0.0.1:${PROXY_PORT}"
+
+ok "代理 → 127.0.0.1:${PROXY_PORT}"
+
+# ---- 测试连通性 ----
+step "测试 GitHub 连通性"
+if wget -q --timeout=10 --spider https://github.com 2>/dev/null; then
+    ok "GitHub 可达"
+else
+    warn "无法连接 GitHub，请确认代理端口正确"
+    echo -ne "  ${YELLOW}是否继续？(y/N)${NC}: "
+    read -r ans
+    [[ "$ans" =~ ^[Yy]$ ]] || exit 1
+fi
+
+# ---- SSH 密钥名称（可选）----
+step "SSH 密钥配置（可选，用于 yazi 远程传输）"
+echo -ne "  输入 SSH 密钥名称 ${DIM}(留空跳过此步骤)${NC}: "
+read -r SSH_KEY_NAME
+if [[ -n "$SSH_KEY_NAME" ]]; then
+    ok "密钥名称: ${SSH_KEY_NAME}"
+else
+    skip "SSH 配置"
+fi
+
+# ---- 基础依赖 ----
+step "安装基础依赖 (wget / curl / unzip)"
+run_quiet "apt update" sudo -E apt-get update -qq
+sudo -E apt-get install -y -qq wget curl unzip > /dev/null 2>&1
+ok "基础依赖就绪"
+
+# ####################################################################
+#  Phase 1 · Tmux
+# ####################################################################
+phase "Phase 1 · 终端复用 (Tmux)"
+
+# ---- Tmux 源码编译 ----
+step "Tmux ${TMUX_VER} (源码编译)"
+
+tmux_need_install=true
+if cmd_exists tmux; then
+    current_tmux=$(tmux -V 2>/dev/null | awk '{print $2}')
+    if [[ "$current_tmux" == "$TMUX_VER" ]]; then
+        tmux_need_install=false
+        skip "Tmux ${TMUX_VER} 已安装"
+    else
+        info "当前 Tmux ${current_tmux}，将升级到 ${TMUX_VER}"
+    fi
+fi
+
+if $tmux_need_install; then
+    info "安装编译依赖..."
+    sudo -E apt-get install -y -qq libevent-dev ncurses-dev build-essential bison pkg-config > /dev/null 2>&1
+    ok "编译依赖就绪"
+
+    info "下载 tmux-${TMUX_VER} 源码..."
+    wget -q --show-progress -P "$WORK_DIR" \
+        "https://github.com/tmux/tmux/releases/download/${TMUX_VER}/tmux-${TMUX_VER}.tar.gz"
+
+    tar -xzf "$WORK_DIR/tmux-${TMUX_VER}.tar.gz" -C "$WORK_DIR"
+
+    if pushd "$WORK_DIR/tmux-${TMUX_VER}" > /dev/null; then
+        # configure
+        ./configure > "$WORK_DIR/configure.log" 2>&1 &
+        cfg_pid=$!
+        spinner "$cfg_pid" "配置编译环境 (./configure)..."
+        if wait "$cfg_pid"; then
+            ok "配置完成"
+        else
+            fail "配置失败，日志: $WORK_DIR/configure.log"
+        fi
+
+        # make
+        make -j"$(nproc)" > "$WORK_DIR/make.log" 2>&1 &
+        make_pid=$!
+        spinner "$make_pid" "编译 tmux（可能需要 1-3 分钟）..."
+        if wait "$make_pid"; then
+            ok "编译完成"
+        else
+            fail "编译失败，日志: $WORK_DIR/make.log"
+        fi
+
+        # install
+        sudo make install > /dev/null 2>&1
+        popd > /dev/null
+
+        if cmd_exists tmux && [[ "$(tmux -V 2>/dev/null | awk '{print $2}')" == "$TMUX_VER" ]]; then
+            ok "Tmux ${TMUX_VER} 安装成功"
+        else
+            fail "Tmux 安装可能不完整，请手动检查"
+        fi
+    else
+        fail "进入 tmux 源码目录失败，跳过编译"
+    fi
+fi
+STATUS["Tmux"]="$(tmux -V 2>/dev/null | awk '{print $2}' || echo '✘')"
+
+# ---- TPM ----
+step "Tmux Plugin Manager (TPM)"
+TPM_DIR="$HOME/.tmux/plugins/tpm"
+if [[ -d "$TPM_DIR" ]]; then
+    skip "TPM 已存在"
+else
+    mkdir -p "$HOME/.tmux/plugins"
+    if git_proxy_clone --depth=1 https://github.com/tmux-plugins/tpm "$TPM_DIR" 2>/dev/null; then
+        ok "TPM 安装完成"
+    else
+        fail "TPM 安装失败"
+    fi
+fi
+
+# ---- .tmux.conf ----
+step "配置 ~/.tmux.conf"
+backup_if_exists "$HOME/.tmux.conf"
+cat > "$HOME/.tmux.conf" << 'TMUX_EOF'
+set -g mouse on
+set -g allow-passthrough on
+set -g default-terminal "screen-256color"
+set-option -ga terminal-overrides ",xterm-256color:Tc"
+
+set -g status-left-length 20
+set -g status-left "#{?client_prefix,#[bg=yellow]#[fg=black] WAITING... #[default], [#S] }"
+
+setw -g mode-keys vi
+
+set -s set-clipboard on
+set -as terminal-overrides ',xterm*:Ms=\E]52;c;%p2%s\a'
+
+bind -T copy-mode-vi v send-keys -X begin-selection
+bind -T copy-mode-vi y send-keys -X copy-pipe-and-cancel
+
+set -g @plugin 'tmux-plugins/tpm'
+set -g @plugin 'tmux-plugins/tmux-resurrect'
+set -g @plugin 'tmux-plugins/tmux-continuum'
+
+set -g @continuum-restore 'on'
+
+run '~/.tmux/plugins/tpm/tpm'
+TMUX_EOF
+ok ".tmux.conf 已写入"
+
+# ---- 自动安装 Tmux 插件 ----
+step "安装 Tmux 插件 (resurrect / continuum)"
+if [[ -x "$HOME/.tmux/plugins/tpm/bin/install_plugins" ]]; then
+    "$HOME/.tmux/plugins/tpm/bin/install_plugins" > "$WORK_DIR/tpm_install.log" 2>&1 &
+    tpm_pid=$!
+    spinner "$tpm_pid" "正在下载 Tmux 插件..."
+    if wait "$tpm_pid"; then
+        ok "Tmux 插件安装完成"
+    else
+        warn "Tmux 插件自动安装失败，请稍后手动执行: ~/.tmux/plugins/tpm/bin/install_plugins"
+    fi
+else
+    warn "TPM 未就绪，请稍后在 tmux 中按 Prefix + I 安装插件"
+fi
+
+# ####################################################################
+#  Phase 2 · Yazi / Rsync
+# ####################################################################
+phase "Phase 2 · 文件管理 (Yazi)"
+
+# ---- Yazi ----
+step "Yazi (终端文件管理器)"
+if cmd_exists yazi; then
+    skip "Yazi 已安装"
+else
+    if [[ "$ARCH_TAG" == "x86_64" ]]; then
+        YAZI_FILE="yazi-x86_64-unknown-linux-musl.zip"
+    else
+        YAZI_FILE="yazi-aarch64-unknown-linux-musl.zip"
+    fi
+    YAZI_URL="https://github.com/sxyazi/yazi/releases/download/${YAZI_VER}/${YAZI_FILE}"
+
+    info "下载 Yazi ${YAZI_VER} (${ARCH_TAG})..."
+    if wget -q --show-progress -P "$WORK_DIR" "$YAZI_URL"; then
+        unzip -qo "$WORK_DIR/$YAZI_FILE" -d "$WORK_DIR"
+        YAZI_DIR=$(find "$WORK_DIR" -maxdepth 1 -type d -name 'yazi-*' | head -1)
+        if [[ -n "$YAZI_DIR" ]]; then
+            sudo mv "$YAZI_DIR/yazi" /usr/bin/
+            sudo mv "$YAZI_DIR/ya" /usr/bin/
+            ok "Yazi 安装完成"
+        else
+            fail "Yazi 解压异常"
+        fi
+    else
+        fail "Yazi 下载失败"
+    fi
+fi
+STATUS["Yazi"]="$(cmd_exists yazi && echo '✔' || echo '✘')"
+
+# ---- Yazi keymap.toml ----
+step "Yazi 快捷键配置"
+mkdir -p "$HOME/.config/yazi"
+backup_if_exists "$HOME/.config/yazi/keymap.toml"
+cat > "$HOME/.config/yazi/keymap.toml" << 'YAZI_KEY_EOF'
+[[mgr.prepend_keymap]]
+on   = [ "g", "l" ]
+run  = '''
+    shell '
+        cwd="$PWD"
+        todo_file="yazi_todo.yazi"
+        target=$(tmux new-window -c "$cwd" -P -F "#{window_id}")
+        if [ -f "$todo_file" ]; then
+            pre_cmd=$(cat "$todo_file")
+            sleep 0.3
+            tmux send-keys -t "$target" "$pre_cmd" C-m
+        fi
+    '
+'''
+desc = "精准锁定新窗口激活环境"
+
+[[mgr.prepend_keymap]]
+on   = [ "R" ]
+run  = '''
+    shell 'printf "%%s\n" %s > /tmp/yazi_transfer_files && tmux split-window -h "bash ~/.config/yazi/scripts/transfer.sh"'
+'''
+desc = "Tmux 分屏传输"
+YAZI_KEY_EOF
+ok "keymap.toml 已写入"
+
+# ---- Yazi 传输脚本 ----
+step "Yazi 传输脚本 (transfer.sh)"
+mkdir -p "$HOME/.config/yazi/scripts"
+backup_if_exists "$HOME/.config/yazi/scripts/transfer.sh"
+cat > "$HOME/.config/yazi/scripts/transfer.sh" << 'YAZI_TRANSFER_EOF'
+#!/bin/bash
+mapfile -t files < /tmp/yazi_transfer_files
+if [ ${#files[@]} -eq 0 ]; then
+        echo "没有选中文件，已取消"; sleep 1; exit 0
+fi
+
+echo "==============================="
+echo "  选择目标服务器"
+echo "==============================="
+echo ""
+echo "  1) macos-yx       ~/Downloads/"
+echo "  q) 取消"
+echo ""
+read -p "请选择 [1/q]: " choice
+
+case $choice in
+    1) dest="macos-yx:~/Downloads/" ;;
+    *) echo "已取消"; sleep 1; exit 0 ;;
+esac
+
+echo ""
+echo "→ 目标: $dest"
+echo "→ 文件: ${files[*]}"
+echo ""
+rsync -avzP "${files[@]}" "$dest"
+echo ""
+echo "传输完成，2秒后关闭..."
+sleep 2
+YAZI_TRANSFER_EOF
+chmod +x "$HOME/.config/yazi/scripts/transfer.sh"
+ok "transfer.sh 已写入"
+
+# ---- Rsync ----
+step "Rsync"
+if cmd_exists rsync; then
+    skip "Rsync 已安装"
+else
+    run_quiet "安装 Rsync" sudo -E DEBIAN_FRONTEND=noninteractive apt-get install -y rsync
+fi
+STATUS["Rsync"]="$(cmd_exists rsync && echo '✔' || echo '✘')"
+
+# ####################################################################
+#  Phase 3 · SSH 配置（可选）
+# ####################################################################
+if [[ -n "${SSH_KEY_NAME:-}" ]]; then
+    phase "Phase 3 · SSH 密钥与远程传输配置"
+
+    # ---- 生成密钥 ----
+    step "生成 SSH 密钥 (ed25519)"
+    SSH_KEY_PATH="$HOME/.ssh/${SSH_KEY_NAME}_key"
+    if [[ -f "$SSH_KEY_PATH" ]]; then
+        skip "密钥 ${SSH_KEY_PATH} 已存在"
+    else
+        mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
+        ssh-keygen -t ed25519 -C "$SSH_KEY_NAME" -f "$SSH_KEY_PATH" -N ""
+        ok "密钥已生成: ${SSH_KEY_PATH}"
+        info "公钥内容:"
+        echo ""
+        echo -e "  ${DIM}$(cat "${SSH_KEY_PATH}.pub")${NC}"
+        echo ""
+    fi
+    STATUS["SSH Key"]="✔"
+
+    # ---- SSH Config ----
+    step "SSH Config (Host macos-yx)"
+    echo -ne "  远程主机 HostName ${DIM}(默认 127.0.0.1)${NC}: "
+    read -r SSH_HOST
+    SSH_HOST=${SSH_HOST:-127.0.0.1}
+
+    echo -ne "  远程用户名 ${DIM}(默认 timo)${NC}: "
+    read -r SSH_USER
+    SSH_USER=${SSH_USER:-timo}
+
+    echo -ne "  SSH 端口 ${DIM}(默认 12025)${NC}: "
+    read -r SSH_PORT
+    SSH_PORT=${SSH_PORT:-12025}
+
+    SSH_CONFIG="$HOME/.ssh/config"
+
+    if [[ -f "$SSH_CONFIG" ]] && grep -q "Host macos-yx" "$SSH_CONFIG" 2>/dev/null; then
+        skip "Host macos-yx 已存在于 SSH config"
+    else
+        cat >> "$SSH_CONFIG" << SSH_CONF_EOF
+
+Host macos-yx
+    HostName ${SSH_HOST}
+    User ${SSH_USER}
+    Port ${SSH_PORT}
+    IdentityFile ~/.ssh/${SSH_KEY_NAME}_key
+    IdentitiesOnly yes
+    PreferredAuthentications publickey
+SSH_CONF_EOF
+        chmod 600 "$SSH_CONFIG"
+        ok "SSH config 已追加 Host macos-yx"
+    fi
+else
+    phase "Phase 3 · SSH 配置（已跳过）"
+fi
+
+# ####################################################################
+#  Phase 4 · 收尾
+# ####################################################################
+phase "Phase 4 · 安装完成"
+
+step "清理临时文件"
+rm -rf "$WORK_DIR"
+ok "已清理 ${WORK_DIR}"
+
+# ---- 安装摘要 ----
+step "安装摘要"
+echo ""
+echo -e "  ${BOLD}┌────────────────────┬────────────────┐${NC}"
+printf "  ${BOLD}│${NC} %-18s ${BOLD}│${NC} %-14s ${BOLD}│${NC}\n" "工具" "状态"
+echo -e "  ${BOLD}├────────────────────┼────────────────┤${NC}"
+
+TOOL_ORDER=("Tmux" "Yazi" "Rsync")
+if [[ -n "${SSH_KEY_NAME:-}" ]]; then
+    TOOL_ORDER+=("SSH Key")
+fi
+
+for tool in "${TOOL_ORDER[@]}"; do
+    val="${STATUS[$tool]:-—}"
+    if [[ "$val" == "✘" ]]; then
+        color="$RED"
+    elif [[ "$val" == "✔" ]]; then
+        color="$GREEN"
+    else
+        color="$GREEN"
+    fi
+    printf "  ${BOLD}│${NC} %-18s ${BOLD}│${NC} ${color}%-14s${NC} ${BOLD}│${NC}\n" "$tool" "$val"
+done
+echo -e "  ${BOLD}└────────────────────┴────────────────┘${NC}"
+
+# ---- 交互操作提示 ----
+echo ""
+echo -e "  ${YELLOW}${BOLD}╔══════════════════════════════════════════════════════╗${NC}"
+echo -e "  ${YELLOW}${BOLD}║          以下操作需要您手动完成                      ║${NC}"
+echo -e "  ${YELLOW}${BOLD}╚══════════════════════════════════════════════════════╝${NC}"
+echo ""
+echo -e "  ${BOLD}1.${NC} 验证 Tmux 插件是否安装成功:"
+echo -e "     ${CYAN}ls ~/.tmux/plugins/${NC}"
+echo -e "     ${DIM}应看到 tpm、tmux-resurrect、tmux-continuum 三个目录${NC}"
+echo ""
+echo -e "  ${BOLD}2.${NC} 如果 Tmux 插件未自动安装，请进入 tmux 后按 ${BOLD}Prefix + I${NC}，或运行:"
+echo -e "     ${CYAN}~/.tmux/plugins/tpm/bin/install_plugins${NC}"
+echo ""
+echo -e "  ${BOLD}3.${NC} Yazi 用法: 进入 tmux 后运行 ${CYAN}yazi${NC}，选中文件后按 ${BOLD}R${NC} 分屏传输到 macos-yx。"
+echo ""
+
+if [[ -n "${SSH_KEY_NAME:-}" ]]; then
+    echo -e "  ${BOLD}4.${NC} 将公钥添加到远程主机以启用免密登录:"
+    echo -e "     ${CYAN}cat ~/.ssh/${SSH_KEY_NAME}_key.pub${NC}"
+    echo -e "     ${DIM}复制输出内容，追加到远程主机的 ~/.ssh/authorized_keys${NC}"
+    echo ""
+fi
+
+echo -e "  ${GREEN}${BOLD}  全部安装流程已完成！${NC}"
+echo ""
