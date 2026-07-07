@@ -95,8 +95,8 @@ backup_if_exists() {
 }
 
 git_proxy_clone() {
-    git -c "http.proxy=http://127.0.0.1:${PROXY_PORT}" \
-        -c "https.proxy=http://127.0.0.1:${PROXY_PORT}" \
+    git -c "http.proxy=http://${PROXY_ADDR}" \
+        -c "https.proxy=http://${PROXY_ADDR}" \
         clone "$@"
 }
 
@@ -159,15 +159,15 @@ info "Ubuntu 版本: ${BOLD}${UBUNTU_VER}${NC}"
 
 # ---- 代理 ----
 step "代理配置"
-echo -ne "  输入代理端口 ${DIM}(默认 17897，回车使用默认)${NC}: "
-read -r PROXY_PORT
-PROXY_PORT=${PROXY_PORT:-17897}
+echo -ne "  输入代理地址 ${DIM}(默认 192.168.60.181:7897，回车使用默认)${NC}: "
+read -r PROXY_ADDR
+PROXY_ADDR=${PROXY_ADDR:-192.168.60.181:7897}
 
-export http_proxy="http://127.0.0.1:${PROXY_PORT}"
-export https_proxy="http://127.0.0.1:${PROXY_PORT}"
-export all_proxy="socks5://127.0.0.1:${PROXY_PORT}"
+export http_proxy="http://${PROXY_ADDR}"
+export https_proxy="http://${PROXY_ADDR}"
+export all_proxy="socks5://${PROXY_ADDR}"
 
-ok "代理 → 127.0.0.1:${PROXY_PORT}"
+ok "代理 → ${PROXY_ADDR}"
 
 # ---- 测试连通性 ----
 step "测试 GitHub 连通性"

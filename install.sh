@@ -132,6 +132,58 @@ cleanup() {
 trap cleanup EXIT
 
 # ####################################################################
+#  组件选择（按需安装）
+# ####################################################################
+ALL_COMPONENTS=(git zsh vim tmux yazi lazygit rsync ssh)
+declare -A SELECTED=()
+SELECT_ALL=true
+
+want()     { $SELECT_ALL && return 0; [[ -n "${SELECTED[$1]:-}" ]]; }
+any_want() { local _c; for _c in "$@"; do want "$_c" && return 0; done; return 1; }
+
+show_help() {
+    banner
+    echo -e "  ${BOLD}用法:${NC} ./install.sh [组件...]"
+    echo ""
+    echo -e "  不带参数 = 安装${BOLD}全部${NC}组件（默认行为）"
+    echo -e "  指定组件 = ${BOLD}仅${NC}安装列出的组件，空格分隔多个"
+    echo ""
+    echo -e "  ${BOLD}可选组件:${NC}"
+    echo -e "    ${CYAN}git${NC}      Git（旧系统自动 PPA 升级）"
+    echo -e "    ${CYAN}zsh${NC}      Zsh + Oh My Zsh + Powerlevel10k + 插件 + .zshrc"
+    echo -e "    ${CYAN}vim${NC}      Vim (vim-gtk3) + .vimrc"
+    echo -e "    ${CYAN}tmux${NC}     Tmux（源码编译）+ TPM + .tmux.conf + 插件"
+    echo -e "    ${CYAN}yazi${NC}     Yazi + keymap.toml + transfer.sh"
+    echo -e "    ${CYAN}lazygit${NC}  Lazygit"
+    echo -e "    ${CYAN}rsync${NC}    Rsync"
+    echo -e "    ${CYAN}ssh${NC}      生成 SSH 密钥 + ~/.ssh/config"
+    echo ""
+    echo -e "  ${BOLD}示例:${NC}"
+    echo -e "    ${DIM}./install.sh${NC}                    # 全部"
+    echo -e "    ${DIM}./install.sh yazi${NC}               # 只装 yazi"
+    echo -e "    ${DIM}./install.sh yazi lazygit tmux${NC}  # 装多个"
+    echo -e "    ${DIM}./install.sh --only zsh vim${NC}     # --only 为可选兼容写法"
+    echo ""
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        -h|--help)
+            show_help; exit 0 ;;
+        -l|--list)
+            echo "可选组件: ${ALL_COMPONENTS[*]}"; exit 0 ;;
+        --only|--option|--components)
+            continue ;;   # 可选兼容写法，本身不代表组件
+        git|zsh|vim|tmux|yazi|lazygit|rsync|ssh)
+            SELECTED[$arg]=1; SELECT_ALL=false ;;
+        *)
+            echo -e "${RED}未知参数: $arg${NC}"
+            echo -e "运行 ${CYAN}./install.sh --help${NC} 查看可用组件"
+            exit 1 ;;
+    esac
+done
+
+# ####################################################################
 #  Phase 0 · 环境检查与用户输入
 # ####################################################################
 banner
@@ -171,37 +223,70 @@ export all_proxy="socks5://127.0.0.1:${PROXY_PORT}"
 ok "代理 → 127.0.0.1:${PROXY_PORT}"
 
 # ---- 测试连通性 ----
-step "测试 GitHub 连通性"
-if wget -q --timeout=10 --spider https://github.com 2>/dev/null; then
-    ok "GitHub 可达"
-else
-    warn "无法连接 GitHub，请确认代理端口正确"
-    echo -ne "  ${YELLOW}是否继续？(y/N)${NC}: "
-    read -r ans
-    [[ "$ans" =~ ^[Yy]$ ]] || exit 1
+if any_want git zsh tmux yazi lazygit; then
+    step "测试 GitHub 连通性"
+    if wget -q --timeout=10 --spider https://github.com 2>/dev/null; then
+        ok "GitHub 可达"
+    else
+        warn "无法连接 GitHub，请确认代理端口正确"
+        echo -ne "  ${YELLOW}是否继续？(y/N)${NC}: "
+        read -r ans
+        [[ "$ans" =~ ^[Yy]$ ]] || exit 1
+    fi
 fi
 
 # ---- SSH 密钥名称（可选）----
-step "SSH 密钥配置（可选，用于 yazi 远程传输）"
-echo -ne "  输入 SSH 密钥名称 ${DIM}(留空跳过此步骤)${NC}: "
-read -r SSH_KEY_NAME
-if [[ -n "$SSH_KEY_NAME" ]]; then
-    ok "密钥名称: ${SSH_KEY_NAME}"
+if want ssh; then
+    step "SSH 密钥配置（可选，用于 yazi 远程传输）"
+    echo -ne "  输入 SSH 密钥名称 ${DIM}(留空跳过此步骤)${NC}: "
+    read -r SSH_KEY_NAME
+    if [[ -n "$SSH_KEY_NAME" ]]; then
+        ok "密钥名称: ${SSH_KEY_NAME}"
+    else
+        skip "SSH 配置"
+    fi
+fi
+
+# ---- 检测 APT 软件源（决定 apt 是否走代理）----
+# 国内/云厂商内网镜像只能直连，塞进出海代理会 502；官方境外源才需要代理。
+step "检测 APT 软件源"
+apt_hosts=$(grep -rhoE 'https?://[^/[:space:]]+' \
+    /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null | sort -u)
+
+# 常见国内镜像关键词（阿里云 / 腾讯云 / 华为云 / 火山 / 清华 / 中科大 / 网易 / 南大 / 交大 / 北外 等）
+DOMESTIC_MIRROR_RE='aliyun|aliyuncs|tencent|tencentyun|myhuaweicloud|huaweicloud|volces|tuna\.tsinghua|mirrors\.ustc|mirrors\.163|mirror\.nju|nju\.edu|sjtug|bfsu|mirrors\.cloud'
+
+if [[ -n "$apt_hosts" ]] && echo "$apt_hosts" | grep -qiE "$DOMESTIC_MIRROR_RE"; then
+    APT_USE_PROXY=false
+    APT_SUDO=(sudo)            # 去掉 -E：apt 直连国内镜像
+    # PPA（launchpad）在境外，即使整体直连也需单独给它挂代理
+    APT_PPA_PROXY=(
+        -o "Acquire::http::Proxy::ppa.launchpad.net=http://127.0.0.1:${PROXY_PORT}"
+        -o "Acquire::http::Proxy::ppa.launchpadcontent.net=http://127.0.0.1:${PROXY_PORT}"
+        -o "Acquire::https::Proxy::ppa.launchpadcontent.net=http://127.0.0.1:${PROXY_PORT}"
+    )
+    ok "检测到国内镜像源，apt 将直连（不走代理）"
 else
-    skip "SSH 配置"
+    APT_USE_PROXY=true
+    APT_SUDO=(sudo -E)         # 保留 -E：apt 通过代理访问境外源
+    APT_PPA_PROXY=()
+    ok "使用官方/境外源，apt 将通过代理"
 fi
 
 # ---- 基础依赖 ----
 step "安装基础依赖 (wget / curl / unzip)"
-run_quiet "apt update" sudo -E apt-get update -qq
-sudo -E apt-get install -y -qq wget curl unzip > /dev/null 2>&1
+run_quiet "apt update" "${APT_SUDO[@]}" apt-get update -qq
+"${APT_SUDO[@]}" apt-get install -y -qq wget curl unzip > /dev/null 2>&1
 ok "基础依赖就绪"
 
 # ####################################################################
 #  Phase 1 · Git / Zsh / Oh My Zsh / Powerlevel10k / 插件
 # ####################################################################
-phase "Phase 1 · Shell 环境"
+if any_want git zsh; then
+    phase "Phase 1 · Shell 环境"
+fi
 
+if want git; then
 # ---- Git ----
 step "Git"
 need_git_upgrade=false
@@ -214,24 +299,29 @@ fi
 
 if $need_git_upgrade; then
     info "Ubuntu ${UBUNTU_VER} 检测到旧版本系统，通过 PPA 升级 Git..."
-    sudo -E apt-get install -y -qq software-properties-common > /dev/null 2>&1
-    sudo -E add-apt-repository -y ppa:git-core/ppa > /dev/null 2>&1
-    run_quiet "升级 Git" sudo -E DEBIAN_FRONTEND=noninteractive apt-get install -y git
+    "${APT_SUDO[@]}" apt-get install -y -qq software-properties-common > /dev/null 2>&1
+    # add-apt-repository 需访问 launchpad（境外），始终走代理；--no-update 避免它用错误的代理策略刷新国内源
+    sudo -E add-apt-repository -y --no-update ppa:git-core/ppa > /dev/null 2>&1
+    # 刷新索引：国内镜像直连，仅 launchpad 走代理（APT_PPA_PROXY 在官方源场景为空）
+    run_quiet "apt update" "${APT_SUDO[@]}" apt-get "${APT_PPA_PROXY[@]}" update -qq
+    run_quiet "升级 Git" "${APT_SUDO[@]}" DEBIAN_FRONTEND=noninteractive apt-get "${APT_PPA_PROXY[@]}" install -y git
 else
     if cmd_exists git; then
         ok "Git $(git --version | awk '{print $3}') 已安装"
     else
-        run_quiet "安装 Git" sudo -E DEBIAN_FRONTEND=noninteractive apt-get install -y git
+        run_quiet "安装 Git" "${APT_SUDO[@]}" DEBIAN_FRONTEND=noninteractive apt-get install -y git
     fi
 fi
 STATUS["Git"]="$(git --version 2>/dev/null | awk '{print $3}' || echo '✘')"
+fi
 
+if want zsh; then
 # ---- Zsh ----
 step "Zsh"
 if cmd_exists zsh; then
     ok "Zsh $(zsh --version | awk '{print $2}') 已安装"
 else
-    run_quiet "安装 Zsh" sudo -E DEBIAN_FRONTEND=noninteractive apt-get install -y zsh
+    run_quiet "安装 Zsh" "${APT_SUDO[@]}" DEBIAN_FRONTEND=noninteractive apt-get install -y zsh
 fi
 STATUS["Zsh"]="$(zsh --version 2>/dev/null | awk '{print $2}' || echo '✘')"
 
@@ -312,12 +402,16 @@ source $ZSH/oh-my-zsh.sh
 ZSHRC_EOF
     ok ".zshrc 已创建"
 fi
+fi
 
 # ####################################################################
 #  Phase 2 · Vim / Tmux
 # ####################################################################
-phase "Phase 2 · 编辑器与终端复用"
+if any_want vim tmux; then
+    phase "Phase 2 · 编辑器与终端复用"
+fi
 
+if want vim; then
 # ---- Vim ----
 step "Vim (vim-gtk3，支持系统剪贴板)"
 vim_has_clipboard=false
@@ -330,7 +424,7 @@ fi
 if $vim_has_clipboard; then
     skip "Vim 已支持 +clipboard"
 else
-    run_quiet "安装 vim-gtk3" sudo -E DEBIAN_FRONTEND=noninteractive apt-get install -y vim-gtk3
+    run_quiet "安装 vim-gtk3" "${APT_SUDO[@]}" DEBIAN_FRONTEND=noninteractive apt-get install -y vim-gtk3
 fi
 STATUS["Vim"]="$(vim --version 2>/dev/null | head -1 | grep -oP 'Vi IMproved \K[0-9.]+' || echo '✘')"
 
@@ -369,7 +463,9 @@ augroup osc52
 augroup END
 VIMRC_EOF
 ok ".vimrc 已写入"
+fi
 
+if want tmux; then
 # ---- Tmux 源码编译 ----
 step "Tmux ${TMUX_VER} (源码编译)"
 
@@ -386,7 +482,7 @@ fi
 
 if $tmux_need_install; then
     info "安装编译依赖..."
-    sudo -E apt-get install -y -qq libevent-dev ncurses-dev build-essential bison pkg-config > /dev/null 2>&1
+    "${APT_SUDO[@]}" apt-get install -y -qq libevent-dev ncurses-dev build-essential bison pkg-config > /dev/null 2>&1
     ok "编译依赖就绪"
 
     info "下载 tmux-${TMUX_VER} 源码..."
@@ -489,12 +585,16 @@ if [[ -x "$HOME/.tmux/plugins/tpm/bin/install_plugins" ]]; then
 else
     warn "TPM 未就绪，请稍后在 tmux 中按 Prefix + I 安装插件"
 fi
+fi
 
 # ####################################################################
 #  Phase 3 · Yazi / Lazygit / Rsync
 # ####################################################################
-phase "Phase 3 · 文件管理与 Git 工具"
+if any_want yazi lazygit rsync; then
+    phase "Phase 3 · 文件管理与 Git 工具"
+fi
 
+if want yazi; then
 # ---- Yazi ----
 step "Yazi (终端文件管理器)"
 if cmd_exists yazi; then
@@ -601,7 +701,9 @@ sleep 2
 YAZI_TRANSFER_EOF
 chmod +x "$HOME/.config/yazi/scripts/transfer.sh"
 ok "transfer.sh 已写入"
+fi
 
+if want lazygit; then
 # ---- Lazygit ----
 step "Lazygit"
 if cmd_exists lazygit; then
@@ -628,15 +730,18 @@ else
     fi
 fi
 STATUS["Lazygit"]="$(cmd_exists lazygit && echo '✔' || echo '✘')"
+fi
 
+if want rsync; then
 # ---- Rsync ----
 step "Rsync"
 if cmd_exists rsync; then
     skip "Rsync 已安装"
 else
-    run_quiet "安装 Rsync" sudo -E DEBIAN_FRONTEND=noninteractive apt-get install -y rsync
+    run_quiet "安装 Rsync" "${APT_SUDO[@]}" DEBIAN_FRONTEND=noninteractive apt-get install -y rsync
 fi
 STATUS["Rsync"]="$(cmd_exists rsync && echo '✔' || echo '✘')"
+fi
 
 # ####################################################################
 #  Phase 4 · SSH 配置（可选）
@@ -692,7 +797,7 @@ SSH_CONF_EOF
         chmod 600 "$SSH_CONFIG"
         ok "SSH config 已追加 Host macos-yx"
     fi
-else
+elif want ssh; then
     phase "Phase 4 · SSH 配置（已跳过）"
 fi
 
@@ -712,10 +817,15 @@ echo -e "  ${BOLD}┌───────────────────�
 printf "  ${BOLD}│${NC} %-18s ${BOLD}│${NC} %-14s ${BOLD}│${NC}\n" "工具" "状态"
 echo -e "  ${BOLD}├────────────────────┼────────────────┤${NC}"
 
-TOOL_ORDER=("Git" "Zsh" "Oh My Zsh" "Powerlevel10k" "Vim" "Tmux" "Yazi" "Lazygit" "Rsync")
-if [[ -n "${SSH_KEY_NAME:-}" ]]; then
-    TOOL_ORDER+=("SSH Key")
-fi
+TOOL_ORDER=()
+want git     && TOOL_ORDER+=("Git")
+want zsh     && TOOL_ORDER+=("Zsh" "Oh My Zsh" "Powerlevel10k")
+want vim     && TOOL_ORDER+=("Vim")
+want tmux    && TOOL_ORDER+=("Tmux")
+want yazi    && TOOL_ORDER+=("Yazi")
+want lazygit && TOOL_ORDER+=("Lazygit")
+want rsync   && TOOL_ORDER+=("Rsync")
+[[ -n "${SSH_KEY_NAME:-}" ]] && TOOL_ORDER+=("SSH Key")
 
 for tool in "${TOOL_ORDER[@]}"; do
     val="${STATUS[$tool]:-—}"
@@ -731,36 +841,45 @@ done
 echo -e "  ${BOLD}└────────────────────┴────────────────┘${NC}"
 
 # ---- 交互操作提示 ----
-echo ""
-echo -e "  ${YELLOW}${BOLD}╔══════════════════════════════════════════════════════╗${NC}"
-echo -e "  ${YELLOW}${BOLD}║          以下操作需要您手动完成                      ║${NC}"
-echo -e "  ${YELLOW}${BOLD}╚══════════════════════════════════════════════════════╝${NC}"
-echo ""
-echo -e "  ${BOLD}1.${NC} 将默认 Shell 切换为 Zsh（需要输入密码）:"
-echo -e "     ${CYAN}chsh -s \$(which zsh)${NC}"
-echo ""
-echo -e "  ${BOLD}2.${NC} 重新登录终端，或执行以下命令立即进入 Zsh:"
-echo -e "     ${CYAN}exec zsh${NC}"
-echo ""
-echo -e "  ${BOLD}3.${NC} 配置 Powerlevel10k 主题（首次进入 Zsh 会自动弹出，或手动运行）:"
-echo -e "     ${CYAN}p10k configure${NC}"
-echo ""
-echo -e "  ${BOLD}4.${NC} p10k configure 完成后，修改路径显示最大长度（可选）:"
-echo -e "     ${CYAN}sed -i 's/typeset -g POWERLEVEL9K_DIR_MAX_LENGTH=.*/typeset -g POWERLEVEL9K_DIR_MAX_LENGTH=20/' ~/.p10k.zsh && source ~/.p10k.zsh${NC}"
-echo ""
-echo -e "  ${BOLD}5.${NC} 验证 Tmux 插件是否安装成功:"
-echo -e "     ${CYAN}ls ~/.tmux/plugins/${NC}"
-echo -e "     ${DIM}应看到 tpm、tmux-resurrect、tmux-continuum 三个目录${NC}"
-echo ""
-echo -e "  ${BOLD}6.${NC} 如果 Tmux 插件未自动安装，请进入 tmux 后按 ${BOLD}Prefix + I${NC}，或运行:"
-echo -e "     ${CYAN}~/.tmux/plugins/tpm/bin/install_plugins${NC}"
-echo ""
-
-if [[ -n "${SSH_KEY_NAME:-}" ]]; then
-    echo -e "  ${BOLD}7.${NC} 将公钥添加到远程主机以启用免密登录:"
-    echo -e "     ${CYAN}cat ~/.ssh/${SSH_KEY_NAME}_key.pub${NC}"
-    echo -e "     ${DIM}复制输出内容，追加到远程主机的 ~/.ssh/authorized_keys${NC}"
+if want zsh || want tmux || [[ -n "${SSH_KEY_NAME:-}" ]]; then
     echo ""
+    echo -e "  ${YELLOW}${BOLD}╔══════════════════════════════════════════════════════╗${NC}"
+    echo -e "  ${YELLOW}${BOLD}║          以下操作需要您手动完成                      ║${NC}"
+    echo -e "  ${YELLOW}${BOLD}╚══════════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    tip_n=0
+    if want zsh; then
+        echo -e "  ${BOLD}$((++tip_n)).${NC} 将默认 Shell 切换为 Zsh（需要输入密码）:"
+        echo -e "     ${CYAN}chsh -s \$(which zsh)${NC}"
+        echo ""
+        echo -e "  ${BOLD}$((++tip_n)).${NC} 重新登录终端，或执行以下命令立即进入 Zsh:"
+        echo -e "     ${CYAN}exec zsh${NC}"
+        echo ""
+        echo -e "  ${BOLD}$((++tip_n)).${NC} 配置 Powerlevel10k 主题（首次进入 Zsh 会自动弹出，或手动运行）:"
+        echo -e "     ${CYAN}p10k configure${NC}"
+        echo ""
+        echo -e "  ${BOLD}$((++tip_n)).${NC} p10k configure 完成后，修改路径显示最大长度（可选）:"
+        echo -e "     ${CYAN}sed -i 's/typeset -g POWERLEVEL9K_DIR_MAX_LENGTH=.*/typeset -g POWERLEVEL9K_DIR_MAX_LENGTH=20/' ~/.p10k.zsh && source ~/.p10k.zsh${NC}"
+        echo ""
+    fi
+
+    if want tmux; then
+        echo -e "  ${BOLD}$((++tip_n)).${NC} 验证 Tmux 插件是否安装成功:"
+        echo -e "     ${CYAN}ls ~/.tmux/plugins/${NC}"
+        echo -e "     ${DIM}应看到 tpm、tmux-resurrect、tmux-continuum 三个目录${NC}"
+        echo ""
+        echo -e "  ${BOLD}$((++tip_n)).${NC} 如果 Tmux 插件未自动安装，请进入 tmux 后按 ${BOLD}Prefix + I${NC}，或运行:"
+        echo -e "     ${CYAN}~/.tmux/plugins/tpm/bin/install_plugins${NC}"
+        echo ""
+    fi
+
+    if [[ -n "${SSH_KEY_NAME:-}" ]]; then
+        echo -e "  ${BOLD}$((++tip_n)).${NC} 将公钥添加到远程主机以启用免密登录:"
+        echo -e "     ${CYAN}cat ~/.ssh/${SSH_KEY_NAME}_key.pub${NC}"
+        echo -e "     ${DIM}复制输出内容，追加到远程主机的 ~/.ssh/authorized_keys${NC}"
+        echo ""
+    fi
 fi
 
 echo -e "  ${GREEN}${BOLD}  全部安装流程已完成！${NC}"
