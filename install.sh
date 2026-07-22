@@ -842,6 +842,18 @@ proxy_off() {
   unset http_proxy https_proxy
   echo "proxy off"
 }
+
+conda_proxy_on() {
+  conda config --set proxy_servers.http http://${PROXY_HELPER_ADDR}
+  conda config --set proxy_servers.https http://${PROXY_HELPER_ADDR}
+  echo "conda proxy on: http://${PROXY_HELPER_ADDR}"
+}
+
+conda_proxy_off() {
+  conda config --remove-key proxy_servers 2>/dev/null
+  conda clean -i -y
+  echo "conda proxy off"
+}
 # <<< proxy helpers <<<
 PROXY_EOF
     ok "proxy_on / proxy_off 已写入 ${RC_FILE} (地址 ${PROXY_HELPER_ADDR})"
