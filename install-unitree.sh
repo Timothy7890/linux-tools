@@ -494,6 +494,44 @@ fi
 # ####################################################################
 phase "Phase 4 · 安装完成"
 
+# ---- Proxy 快捷函数（可选）----
+step "Proxy 快捷函数 (proxy_on / proxy_off)"
+echo -ne "  是否在 rc 中添加 proxy_on / proxy_off 快捷函数？${DIM}(y/N)${NC}: "
+read -r proxy_helper_ans
+if [[ "$proxy_helper_ans" =~ ^[Yy]$ ]]; then
+    echo -ne "  代理地址 ${DIM}(默认 ${PROXY_ADDR}，回车使用)${NC}: "
+    read -r PROXY_HELPER_ADDR
+    PROXY_HELPER_ADDR=${PROXY_HELPER_ADDR:-$PROXY_ADDR}
+
+    RC_FILE="$HOME/.bashrc"
+    backup_if_exists "$RC_FILE"
+
+    if [[ -f "$RC_FILE" ]] && grep -q '# >>> proxy helpers >>>' "$RC_FILE" 2>/dev/null; then
+        sed -i '/# >>> proxy helpers >>>/,/# <<< proxy helpers <<</d' "$RC_FILE"
+        info "已移除旧的 proxy helpers 配置"
+    fi
+
+    cat >> "$RC_FILE" << PROXY_EOF
+
+# >>> proxy helpers >>>
+proxy_on() {
+  export http_proxy=http://${PROXY_HELPER_ADDR}
+  export https_proxy=http://${PROXY_HELPER_ADDR}
+  echo "proxy on: \$http_proxy"
+}
+
+proxy_off() {
+  unset http_proxy https_proxy
+  echo "proxy off"
+}
+# <<< proxy helpers <<<
+PROXY_EOF
+    ok "proxy_on / proxy_off 已写入 ${RC_FILE} (地址 ${PROXY_HELPER_ADDR})"
+    info "执行 ${BOLD}source ${RC_FILE}${NC} 或重开终端后，可用 proxy_on / proxy_off 切换代理"
+else
+    skip "Proxy 快捷函数"
+fi
+
 step "清理临时文件"
 rm -rf "$WORK_DIR"
 ok "已清理 ${WORK_DIR}"
