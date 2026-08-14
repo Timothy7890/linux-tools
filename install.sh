@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # ============================================================================
 #  Linux 工具包一键安装脚本
-#  自动安装: Git / Zsh / Oh My Zsh / Powerlevel10k / Vim / Tmux / Yazi / Lazygit
+#  自动安装: Git / Zsh / Oh My Zsh / Powerlevel10k / Vim / Tmux / Btop / Yazi / Lazygit
 # ============================================================================
 
 # ========================= 版本配置（集中管理）=========================
 TMUX_VER="3.6a"
+BTOP_VER="1.3.2"
 YAZI_VER="v26.1.22"
 LAZYGIT_VER="0.57.0"
 
@@ -46,7 +47,7 @@ banner() {
     echo -e "${CYAN}${BOLD}  ║                                                      ║${NC}"
     echo -e "${CYAN}${BOLD}  ║         Linux 工具包  ·  一键安装脚本                ║${NC}"
     echo -e "${CYAN}${BOLD}  ║                                                      ║${NC}"
-    echo -e "${CYAN}${BOLD}  ║   zsh · oh-my-zsh · vim · tmux · yazi · lazygit      ║${NC}"
+    echo -e "${CYAN}${BOLD}  ║ zsh · oh-my-zsh · vim · tmux · btop · yazi · lazygit ║${NC}"
     echo -e "${CYAN}${BOLD}  ║                                                      ║${NC}"
     echo -e "${CYAN}${BOLD}  ╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -134,7 +135,7 @@ trap cleanup EXIT
 # ####################################################################
 #  组件选择（按需安装）
 # ####################################################################
-ALL_COMPONENTS=(git zsh vim tmux yazi lazygit rsync ssh)
+ALL_COMPONENTS=(git zsh vim tmux btop yazi lazygit rsync ssh)
 declare -A SELECTED=()
 SELECT_ALL=true
 
@@ -153,6 +154,7 @@ show_help() {
     echo -e "    ${CYAN}zsh${NC}      Zsh + Oh My Zsh + Powerlevel10k + 插件 + .zshrc"
     echo -e "    ${CYAN}vim${NC}      Vim (vim-gtk3) + .vimrc"
     echo -e "    ${CYAN}tmux${NC}     Tmux（源码编译）+ TPM + .tmux.conf + 插件"
+    echo -e "    ${CYAN}btop${NC}     Btop 1.3.2（源码编译，支持 GPU 监控）"
     echo -e "    ${CYAN}yazi${NC}     Yazi + keymap.toml + transfer.sh"
     echo -e "    ${CYAN}lazygit${NC}  Lazygit"
     echo -e "    ${CYAN}rsync${NC}    Rsync"
@@ -174,7 +176,7 @@ for arg in "$@"; do
             echo "可选组件: ${ALL_COMPONENTS[*]}"; exit 0 ;;
         --only|--option|--components)
             continue ;;   # 可选兼容写法，本身不代表组件
-        git|zsh|vim|tmux|yazi|lazygit|rsync|ssh)
+        git|zsh|vim|tmux|btop|yazi|lazygit|rsync|ssh)
             SELECTED[$arg]=1; SELECT_ALL=false ;;
         *)
             echo -e "${RED}未知参数: $arg${NC}"
@@ -223,7 +225,7 @@ export all_proxy="socks5://${PROXY_ADDR}"
 ok "代理 → ${PROXY_ADDR}"
 
 # ---- 测试连通性 ----
-if any_want git zsh tmux yazi lazygit; then
+if any_want git zsh tmux btop yazi lazygit; then
     step "测试 GitHub 连通性"
     if wget -q --timeout=10 --spider https://github.com 2>/dev/null; then
         ok "GitHub 可达"
@@ -405,10 +407,10 @@ fi
 fi
 
 # ####################################################################
-#  Phase 2 · Vim / Tmux
+#  Phase 2 · Vim / Tmux / Btop
 # ####################################################################
-if any_want vim tmux; then
-    phase "Phase 2 · 编辑器与终端复用"
+if any_want vim tmux btop; then
+    phase "Phase 2 · 编辑器与终端工具"
 fi
 
 if want vim; then
@@ -584,6 +586,114 @@ if [[ -x "$HOME/.tmux/plugins/tpm/bin/install_plugins" ]]; then
     fi
 else
     warn "TPM 未就绪，请稍后在 tmux 中按 Prefix + I 安装插件"
+fi
+fi
+
+if want btop; then
+# ---- Btop 源码编译（GPU 支持）----
+step "Btop ${BTOP_VER} (源码编译，GPU 支持)"
+
+btop_need_install=true
+if cmd_exists btop; then
+    current_btop=$(btop --version 2>/dev/null | awk 'NR == 1 {print $NF}')
+    if [[ "$current_btop" == "$BTOP_VER" ]]; then
+        btop_need_install=false
+        skip "Btop ${BTOP_VER} 已安装"
+    else
+        info "当前 Btop ${current_btop:-未知版本}，将安装 ${BTOP_VER}"
+    fi
+fi
+
+if $btop_need_install; then
+    info "安装 Btop 编译依赖..."
+    "${APT_SUDO[@]}" apt-get install -y -qq build-essential > /dev/null 2>&1
+    ok "编译依赖就绪"
+
+    BTOP_CXX="g++"
+    btop_compiler_ready=true
+    btop_cxx_major=0
+    if cmd_exists "$BTOP_CXX"; then
+        btop_cxx_major=$("$BTOP_CXX" -dumpfullversion -dumpversion 2>/dev/null | cut -d. -f1)
+    fi
+
+    # Btop 1.3.2 需要 GCC 10.1+；Ubuntu 20.04 默认 GCC 9.4，需要新版编译器。
+    if [[ ! "$btop_cxx_major" =~ ^[0-9]+$ ]] || (( btop_cxx_major < 10 )); then
+        warn "当前 g++ ${btop_cxx_major:-未知} 过旧，Btop ${BTOP_VER} 需要 GCC 10.1+"
+
+        if ! cmd_exists g++-13; then
+            info "通过 ubuntu-toolchain-r/test PPA 安装 g++-13..."
+            "${APT_SUDO[@]}" apt-get install -y -qq software-properties-common > /dev/null 2>&1
+
+            if sudo -E add-apt-repository -y --no-update ppa:ubuntu-toolchain-r/test > /dev/null 2>&1; then
+                run_quiet "更新 GCC PPA 索引" \
+                    "${APT_SUDO[@]}" apt-get "${APT_PPA_PROXY[@]}" update -qq
+                run_quiet "安装 g++-13" \
+                    "${APT_SUDO[@]}" DEBIAN_FRONTEND=noninteractive \
+                    apt-get "${APT_PPA_PROXY[@]}" install -y g++-13
+            else
+                fail "添加 ubuntu-toolchain-r/test PPA 失败"
+            fi
+        fi
+
+        if cmd_exists g++-13; then
+            BTOP_CXX="g++-13"
+            ok "将使用 g++-13 编译，不修改系统默认编译器"
+        else
+            btop_compiler_ready=false
+            fail "找不到满足要求的 C++ 编译器，无法编译 Btop"
+        fi
+    else
+        ok "编译器可用: $("$BTOP_CXX" --version | head -1)"
+    fi
+
+    BTOP_GPU_SUPPORT=true
+    if [[ "$ARCH_TAG" != "x86_64" ]]; then
+        BTOP_GPU_SUPPORT=false
+        warn "Btop ${BTOP_VER} 仅在 Linux x86_64 支持 GPU 监控，当前将编译普通版本"
+    fi
+
+    if $btop_compiler_ready && cmd_exists "$BTOP_CXX"; then
+        BTOP_ARCHIVE="$WORK_DIR/btop-v${BTOP_VER}.tar.gz"
+        BTOP_SRC_DIR="$WORK_DIR/btop-${BTOP_VER}"
+
+        info "下载 Btop ${BTOP_VER} 源码..."
+        if wget -q --show-progress -O "$BTOP_ARCHIVE" \
+            "https://github.com/aristocratos/btop/archive/refs/tags/v${BTOP_VER}.tar.gz"; then
+            if tar -xzf "$BTOP_ARCHIVE" -C "$WORK_DIR" &&
+                pushd "$BTOP_SRC_DIR" > /dev/null; then
+                # -ldl 兼容 Ubuntu 20.04 上启用 GPU 支持时的动态库链接。
+                make CXX="$BTOP_CXX" GPU_SUPPORT="$BTOP_GPU_SUPPORT" LDFLAGS=-ldl \
+                    > "$WORK_DIR/btop_make.log" 2>&1 &
+                btop_make_pid=$!
+                spinner "$btop_make_pid" "编译 Btop（GPU 支持）..."
+
+                if wait "$btop_make_pid"; then
+                    ok "Btop 编译完成"
+                    if sudo -E make install CXX="$BTOP_CXX" \
+                        GPU_SUPPORT="$BTOP_GPU_SUPPORT" LDFLAGS=-ldl \
+                        > "$WORK_DIR/btop_install.log" 2>&1; then
+                        ok "Btop ${BTOP_VER} 安装完成"
+                    else
+                        fail "Btop 安装失败，日志: $WORK_DIR/btop_install.log"
+                    fi
+                else
+                    fail "Btop 编译失败，日志: $WORK_DIR/btop_make.log"
+                    echo -e "  ${DIM}$(tail -5 "$WORK_DIR/btop_make.log" 2>/dev/null)${NC}"
+                fi
+                popd > /dev/null
+            else
+                fail "Btop 源码解压失败"
+            fi
+        else
+            fail "Btop 源码下载失败"
+        fi
+    fi
+fi
+
+if cmd_exists btop; then
+    STATUS["Btop"]="$(btop --version 2>/dev/null | awk 'NR == 1 {print $NF}')"
+else
+    STATUS["Btop"]="✘"
 fi
 fi
 
@@ -878,6 +988,7 @@ want git     && TOOL_ORDER+=("Git")
 want zsh     && TOOL_ORDER+=("Zsh" "Oh My Zsh" "Powerlevel10k")
 want vim     && TOOL_ORDER+=("Vim")
 want tmux    && TOOL_ORDER+=("Tmux")
+want btop    && TOOL_ORDER+=("Btop")
 want yazi    && TOOL_ORDER+=("Yazi")
 want lazygit && TOOL_ORDER+=("Lazygit")
 want rsync   && TOOL_ORDER+=("Rsync")
