@@ -260,11 +260,87 @@ if [[ -n "$apt_hosts" ]]; then
 fi
 echo -e "  ${BOLD}1)${NC} 直连（国内镜像源，PPA 单独走代理）"
 echo -e "  ${BOLD}2)${NC} 走代理（官方/境外源）"
+echo -e "  ${BOLD}3)${NC} 切换为国外官方源（原始版本），并走代理"
 apt_choice=""
-until [[ "$apt_choice" =~ ^[12]$ ]]; do
-    echo -ne "  请选择 apt 访问方式 [1-2]: "
+until [[ "$apt_choice" =~ ^[123]$ ]]; do
+    echo -ne "  请选择 apt 访问方式 [1-3]: "
     read -r apt_choice
 done
+
+# 改写为官方源：先备份原文件，deb822（ubuntu.sources / debian.sources）与传统 sources.list 两种格式都处理
+restore_official_sources() {
+    local os_id codename ts arch url sec_url suites sec_suite comps
+    os_id=$(. /etc/os-release && echo "${ID:-}")
+    codename=$(. /etc/os-release && echo "${VERSION_CODENAME:-}")
+    ts=$(date +%Y%m%d%H%M%S)
+    arch=$(dpkg --print-architecture 2>/dev/null)
+
+    case "$os_id" in
+        ubuntu)
+            if [[ "$arch" == amd64 || "$arch" == i386 ]]; then
+                url="http://archive.ubuntu.com/ubuntu/"
+                sec_url="http://security.ubuntu.com/ubuntu/"
+            else
+                url="http://ports.ubuntu.com/ubuntu-ports/"
+                sec_url="$url"
+            fi
+            suites="${codename} ${codename}-updates ${codename}-backports"
+            sec_suite="${codename}-security"
+            comps="main restricted universe multiverse"
+            ;;
+        debian)
+            url="http://deb.debian.org/debian/"
+            sec_url="http://deb.debian.org/debian-security/"
+            suites="${codename} ${codename}-updates"
+            sec_suite="${codename}-security"
+            comps="main contrib non-free non-free-firmware"
+            ;;
+        *)
+            fail "不支持的系统: ${os_id:-unknown}，未修改软件源"
+            return 1
+            ;;
+    esac
+    [[ -n "$codename" ]] || { fail "无法获取系统版本代号，未修改软件源"; return 1; }
+
+    local deb822="/etc/apt/sources.list.d/${os_id}.sources"
+    if [[ -f "$deb822" ]]; then
+        sudo cp -a "$deb822" "${deb822}.bak.${ts}"
+        sudo tee "$deb822" > /dev/null <<EOF
+Types: deb
+URIs: ${url}
+Suites: ${suites}
+Components: ${comps}
+Signed-By: /usr/share/keyrings/${os_id}-archive-keyring.gpg
+
+Types: deb
+URIs: ${sec_url}
+Suites: ${sec_suite}
+Components: ${comps}
+Signed-By: /usr/share/keyrings/${os_id}-archive-keyring.gpg
+EOF
+        info "已备份 ${deb822} → ${deb822}.bak.${ts}"
+        # deb822 生效时 sources.list 只留注释，避免与镜像源重复
+        if [[ -s /etc/apt/sources.list ]]; then
+            sudo cp -a /etc/apt/sources.list "/etc/apt/sources.list.bak.${ts}"
+            echo "# 已迁移至 ${deb822}" | sudo tee /etc/apt/sources.list > /dev/null
+            info "已备份 /etc/apt/sources.list → /etc/apt/sources.list.bak.${ts}"
+        fi
+    else
+        [[ -f /etc/apt/sources.list ]] && sudo cp -a /etc/apt/sources.list "/etc/apt/sources.list.bak.${ts}"
+        {
+            local s
+            for s in $suites; do echo "deb ${url} ${s} ${comps}"; done
+            echo "deb ${sec_url} ${sec_suite} ${comps}"
+        } | sudo tee /etc/apt/sources.list > /dev/null
+        info "已备份 /etc/apt/sources.list → /etc/apt/sources.list.bak.${ts}"
+    fi
+    ok "已切换为 ${os_id} 官方源"
+}
+
+if [[ "$apt_choice" == 3 ]]; then
+    restore_official_sources || warn "官方源切换失败，保持原软件源，apt 仍将走代理"
+    apt_choice=2
+fi
 
 if [[ "$apt_choice" == 1 ]]; then
     APT_USE_PROXY=false
