@@ -249,16 +249,24 @@ if want ssh; then
     fi
 fi
 
-# ---- 检测 APT 软件源（决定 apt 是否走代理）----
+# ---- APT 是否走代理（由用户选择）----
 # 国内/云厂商内网镜像只能直连，塞进出海代理会 502；官方境外源才需要代理。
-step "检测 APT 软件源"
+step "APT 代理配置"
 apt_hosts=$(grep -rhoE 'https?://[^/[:space:]]+' \
     /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null | sort -u)
+if [[ -n "$apt_hosts" ]]; then
+    info "当前 APT 软件源:"
+    echo "$apt_hosts" | sed 's/^/      /'
+fi
+echo -e "  ${BOLD}1)${NC} 直连（国内镜像源，PPA 单独走代理）"
+echo -e "  ${BOLD}2)${NC} 走代理（官方/境外源）"
+apt_choice=""
+until [[ "$apt_choice" =~ ^[12]$ ]]; do
+    echo -ne "  请选择 apt 访问方式 [1-2]: "
+    read -r apt_choice
+done
 
-# 常见国内镜像关键词（阿里云 / 腾讯云 / 华为云 / 火山 / 清华 / 中科大 / 网易 / 南大 / 交大 / 北外 等）
-DOMESTIC_MIRROR_RE='aliyun|aliyuncs|tencent|tencentyun|myhuaweicloud|huaweicloud|volces|tuna\.tsinghua|mirrors\.ustc|mirrors\.163|mirror\.nju|nju\.edu|sjtug|bfsu|mirrors\.cloud'
-
-if [[ -n "$apt_hosts" ]] && echo "$apt_hosts" | grep -qiE "$DOMESTIC_MIRROR_RE"; then
+if [[ "$apt_choice" == 1 ]]; then
     APT_USE_PROXY=false
     APT_SUDO=(sudo)            # 去掉 -E：apt 直连国内镜像
     # PPA（launchpad）在境外，即使整体直连也需单独给它挂代理
@@ -267,12 +275,12 @@ if [[ -n "$apt_hosts" ]] && echo "$apt_hosts" | grep -qiE "$DOMESTIC_MIRROR_RE";
         -o "Acquire::http::Proxy::ppa.launchpadcontent.net=http://${PROXY_ADDR}"
         -o "Acquire::https::Proxy::ppa.launchpadcontent.net=http://${PROXY_ADDR}"
     )
-    ok "检测到国内镜像源，apt 将直连（不走代理）"
+    ok "apt 将直连（不走代理）"
 else
     APT_USE_PROXY=true
     APT_SUDO=(sudo -E)         # 保留 -E：apt 通过代理访问境外源
     APT_PPA_PROXY=()
-    ok "使用官方/境外源，apt 将通过代理"
+    ok "apt 将通过代理"
 fi
 
 # ---- 基础依赖 ----
