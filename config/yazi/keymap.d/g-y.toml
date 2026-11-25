@@ -1,0 +1,6 @@
+[[mgr.prepend_keymap]]
+on   = [ "g", "y" ]
+run  = '''
+    shell 'printf "%%s\n" %s > /tmp/yazi_copy_files && tmux split-window -h "bash ~/.config/yazi/scripts/copy_tool.sh"'
+'''
+desc = "Tmux 分屏 目录工具（复制/剪切、重整、拼接、transforms 广播）"

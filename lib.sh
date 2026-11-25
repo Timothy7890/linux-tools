@@ -509,6 +509,16 @@ deploy_transfer_script() {
     chmod +x "$dest" 2>/dev/null
 }
 
+deploy_yazi_dirtool() {
+    step "Yazi 目录工具 (g y)"
+    local f
+    for f in copy_tool.sh use_existed_trans.py; do
+        deploy_config "$CONFIG_DIR/yazi/scripts/$f" "$HOME/.config/yazi/scripts/$f" managed
+    done
+    chmod +x "$HOME/.config/yazi/scripts/copy_tool.sh" 2>/dev/null
+    cmd_exists python3 || warn "未找到 python3：g y 的功能 4（transforms 广播）不可用，其余功能正常"
+}
+
 deploy_yazi_viz() {
     step "Yazi 可视化脚本 (gv)"
     local f

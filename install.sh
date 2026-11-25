@@ -59,7 +59,7 @@ show_help() {
     echo -e "    ${CYAN}vim${NC}      Vim (vim-gtk3) + .vimrc"
     echo -e "    ${CYAN}tmux${NC}     Tmux（源码编译）+ TPM + .tmux.conf + 插件"
     echo -e "    ${CYAN}btop${NC}     Btop 1.3.2（源码编译，支持 GPU 监控）"
-    echo -e "    ${CYAN}yazi${NC}     Yazi + keymap.toml + transfer.sh + gv 可视化 (venv)"
+    echo -e "    ${CYAN}yazi${NC}     Yazi + keymap + transfer.sh + gv 可视化 + gy 目录工具"
     echo -e "    ${CYAN}lazygit${NC}  Lazygit"
     echo -e "    ${CYAN}rsync${NC}    Rsync"
     echo -e "    ${CYAN}ssh${NC}      生成 SSH 密钥 + ~/.ssh/config"
@@ -392,8 +392,9 @@ fi
 if want yazi; then
     install_yazi_bin
     step "Yazi 快捷键配置"
-    deploy_yazi_keymap g-l g-i R g-v
+    deploy_yazi_keymap g-l g-i R g-v g-y
     deploy_transfer_script transfer.sh
+    deploy_yazi_dirtool
     deploy_yazi_viz
 fi
 
