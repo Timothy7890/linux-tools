@@ -163,8 +163,25 @@ feature_copy() {
         [[ "${entries[$i]}" == *"$refname"* ]] && hint="   （含子目录名「$refname」，将按各子目录自动替换）"
         printf "  %2d) %-6s %s%s\n" "$((i+1))" "$mark" "${entries[$i]}" "$hint"
     done
+    # 列出参考子目录里出现的文件后缀，方便按后缀匹配
+    local exts=() ext
+    declare -A ext_n
+    for e in "${entries[@]}"; do
+        [ -f "$ref/$e" ] || continue
+        [[ "$e" == *.* ]] || continue
+        ext="${e##*.}"
+        [ -z "${ext_n[$ext]+x}" ] && exts+=("$ext")
+        ext_n[$ext]=$(( ${ext_n[$ext]:-0} + 1 ))
+    done
     echo ""
     echo "  输入编号（空格或逗号分隔，如: 1 2），或输入 a 选择全部"
+    echo "  也可按名字匹配（每个子目录各自匹配，可与编号混用）："
+    echo "    .mp4 或 *.mp4  → 所有 mp4 文件；  *_mask*  → 名字含 _mask 的项"
+    if [ ${#exts[@]} -gt 0 ]; then
+        local ext_hint=""
+        for ext in "${exts[@]}"; do ext_hint+="  *.$ext(${ext_n[$ext]})"; done
+        echo "  本参考目录中的后缀:$ext_hint"
+    fi
     local picks
     read -p "请勾选: " picks
     [ -z "$picks" ] && abort "未勾选任何项，已取消"
@@ -176,13 +193,24 @@ feature_copy() {
         picks="${picks//,/ }"
         declare -A seen
         local n idx ent
+        set -f   # 防止 *.mp4 在拆分时被当前目录展开
         for n in $picks; do
-            if ! [[ "$n" =~ ^[0-9]+$ ]]; then echo "  忽略无效输入: $n"; continue; fi
+            if ! [[ "$n" =~ ^[0-9]+$ ]]; then
+                # 名字匹配：.mp4 → *.mp4；其余原样作为通配模式
+                [[ "$n" =~ ^\.[^./*?]+$ ]] && n="*$n"
+                if [[ "$n" == *[*?[]* ]]; then
+                    if [ -z "${seen[$n]+x}" ]; then seen[$n]=1; patterns+=("$n"); fi
+                else
+                    echo "  忽略无效输入: $n（通配请写成 *.mp4 或 .mp4）"
+                fi
+                continue
+            fi
             idx=$((n-1))
             if [ "$idx" -lt 0 ] || [ "$idx" -ge ${#entries[@]} ]; then echo "  编号越界: $n"; continue; fi
             ent="${entries[$idx]}"
             if [ -z "${seen[$ent]+x}" ]; then seen[$ent]=1; patterns+=("$ent"); fi
         done
+        set +f
     fi
     [ ${#patterns[@]} -eq 0 ] && abort "未勾选任何有效项，已取消"
 
@@ -200,6 +228,7 @@ feature_copy() {
     # 生成计划 & 检查缺失（遍历每个被选中的大目录）
     local plan_src=() plan_rel=() missing=() emptybig=()
     local big bsub bn s sn pat relprefix
+    declare -A planned   # 编号与通配可能命中同一文件，去重
     for big in "${dirs[@]}"; do
         if [ $multi -eq 1 ]; then
             relprefix="${big#"$common"/}/"      # 例如 pepper/ 或 a/pepper/
@@ -222,7 +251,22 @@ feature_copy() {
                 else
                     realpat="$pat"
                 fi
-                if [ -e "$s/$realpat" ]; then
+                if [[ "$realpat" == *[*?[]* ]]; then
+                    # 通配模式：在当前子目录内展开（不含隐藏文件，不区分大小写：.mp4 也匹配 .MP4）
+                    local m matched=0
+                    shopt -s nullglob nocaseglob
+                    for m in "$s"/$realpat; do
+                        matched=1
+                        m="$(basename "$m")"
+                        [ -n "${planned[$s/$m]+x}" ] && continue
+                        planned[$s/$m]=1
+                        plan_src+=("$s/$m"); plan_rel+=("${relprefix}${sn}/${m}")
+                    done
+                    shopt -u nullglob nocaseglob
+                    [ $matched -eq 0 ] && missing+=("${relprefix}${sn}/${realpat}")
+                elif [ -e "$s/$realpat" ]; then
+                    [ -n "${planned[$s/$realpat]+x}" ] && continue
+                    planned[$s/$realpat]=1
                     plan_src+=("$s/$realpat"); plan_rel+=("${relprefix}${sn}/${realpat}")
                 else
                     missing+=("${relprefix}${sn}/${realpat}")
