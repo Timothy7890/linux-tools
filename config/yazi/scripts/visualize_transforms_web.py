@@ -60,7 +60,7 @@ NORMAL_SCALE = 0.15
 
 
 def parse_transforms(json_path: str) -> tuple[dict, list[np.ndarray], list[str], dict]:
-    with open(json_path, "r") as f:
+    with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     required = ["fl_x", "fl_y", "cx", "cy", "w", "h"]
