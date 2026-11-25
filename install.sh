@@ -126,6 +126,8 @@ fi
 
 # ========================= 临时目录 =========================
 WORK_DIR=$(mktemp -d /tmp/linux-tool-install-XXXXXX)
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VIZ_ENV="$HOME/.local/share/yazi-viz"
 cleanup() {
     kill "$SUDO_KEEPALIVE_PID" 2>/dev/null
     rm -rf "$WORK_DIR"
@@ -155,7 +157,7 @@ show_help() {
     echo -e "    ${CYAN}vim${NC}      Vim (vim-gtk3) + .vimrc"
     echo -e "    ${CYAN}tmux${NC}     Tmux（源码编译）+ TPM + .tmux.conf + 插件"
     echo -e "    ${CYAN}btop${NC}     Btop 1.3.2（源码编译，支持 GPU 监控）"
-    echo -e "    ${CYAN}yazi${NC}     Yazi + keymap.toml + transfer.sh"
+    echo -e "    ${CYAN}yazi${NC}     Yazi + keymap.toml + transfer.sh + gv 可视化 (venv)"
     echo -e "    ${CYAN}lazygit${NC}  Lazygit"
     echo -e "    ${CYAN}rsync${NC}    Rsync"
     echo -e "    ${CYAN}ssh${NC}      生成 SSH 密钥 + ~/.ssh/config"
@@ -850,6 +852,13 @@ run  = '''
     shell 'printf "%%s\n" %s > /tmp/yazi_transfer_files && tmux split-window -h "bash ~/.config/yazi/scripts/transfer.sh"'
 '''
 desc = "Tmux 分屏传输"
+
+[[mgr.prepend_keymap]]
+on   = [ "g", "v" ]
+run  = '''
+    shell 'printf "%%s\n" %s > /tmp/yazi_viz_files && tmux split-window -h "bash ~/.config/yazi/scripts/visualize_web.sh"'
+'''
+desc = "Tmux 分屏 Web 可视化 transforms / masks"
 YAZI_KEY_EOF
 ok "keymap.toml 已写入"
 
@@ -895,6 +904,57 @@ sleep 2
 YAZI_TRANSFER_EOF
 chmod +x "$HOME/.config/yazi/scripts/transfer.sh"
 ok "transfer.sh 已写入"
+
+# ---- Yazi gv 可视化脚本 ----
+step "Yazi 可视化脚本 (gv)"
+VIZ_SRC_DIR="$REPO_DIR/yazi/scripts"
+VIZ_FILES=(visualize_web.sh visualize_transforms_web.py visualize_masks_web.py)
+viz_copied=true
+for f in "${VIZ_FILES[@]}"; do
+    if [[ ! -f "$VIZ_SRC_DIR/$f" ]]; then
+        fail "缺少 $VIZ_SRC_DIR/$f（请在仓库目录内运行 install.sh）"
+        viz_copied=false
+        continue
+    fi
+    backup_if_exists "$HOME/.config/yazi/scripts/$f"
+    cp "$VIZ_SRC_DIR/$f" "$HOME/.config/yazi/scripts/$f"
+done
+chmod +x "$HOME/.config/yazi/scripts/visualize_web.sh" 2>/dev/null
+$viz_copied && ok "可视化脚本已写入 ~/.config/yazi/scripts/"
+
+# ---- gv 可视化 Python 依赖（独立 venv）----
+step "gv 可视化依赖 (venv: ${VIZ_ENV})"
+VIZ_PKGS=(numpy pillow plotly fastapi uvicorn)
+if [[ -x "$VIZ_ENV/bin/python" ]] && "$VIZ_ENV/bin/python" -c "import numpy, PIL, plotly, fastapi, uvicorn" 2>/dev/null; then
+    skip "venv 已存在且依赖齐全"
+    STATUS["Yazi 可视化"]="✔"
+else
+    echo -ne "  是否安装 gv 可视化依赖（约 150MB）？${DIM}(Y/n)${NC}: "
+    read -r viz_ans
+    if [[ "$viz_ans" =~ ^[Nn]$ ]]; then
+        skip "gv 可视化依赖（按 gv 时会提示安装）"
+        STATUS["Yazi 可视化"]="跳过"
+    else
+        if ! python3 -c "import venv, ensurepip" 2>/dev/null; then
+            run_quiet "安装 python3-venv" "${APT_SUDO[@]}" apt-get install -y -qq python3-venv
+        fi
+        # 国内镜像直连；选了代理时走官方 PyPI
+        if [[ "${APT_USE_PROXY:-true}" == false ]]; then
+            PIP_ARGS=(-i https://pypi.tuna.tsinghua.edu.cn/simple)
+            PIP_ENV=(env -u http_proxy -u https_proxy -u all_proxy)
+        else
+            PIP_ARGS=()
+            PIP_ENV=(env)
+        fi
+        if run_quiet "创建 venv" python3 -m venv "$VIZ_ENV" \
+            && run_quiet "升级 pip" "${PIP_ENV[@]}" "$VIZ_ENV/bin/pip" install -q "${PIP_ARGS[@]}" --upgrade pip \
+            && run_quiet "安装 ${VIZ_PKGS[*]}" "${PIP_ENV[@]}" "$VIZ_ENV/bin/pip" install -q "${PIP_ARGS[@]}" "${VIZ_PKGS[@]}"; then
+            STATUS["Yazi 可视化"]="✔"
+        else
+            STATUS["Yazi 可视化"]="✘"
+        fi
+    fi
+fi
 fi
 
 if want lazygit; then
@@ -1073,7 +1133,7 @@ want zsh     && TOOL_ORDER+=("Zsh" "Oh My Zsh" "Powerlevel10k")
 want vim     && TOOL_ORDER+=("Vim")
 want tmux    && TOOL_ORDER+=("Tmux")
 want btop    && TOOL_ORDER+=("Btop")
-want yazi    && TOOL_ORDER+=("Yazi")
+want yazi    && TOOL_ORDER+=("Yazi" "Yazi 可视化")
 want lazygit && TOOL_ORDER+=("Lazygit")
 want rsync   && TOOL_ORDER+=("Rsync")
 [[ -n "${SSH_KEY_NAME:-}" ]] && TOOL_ORDER+=("SSH Key")
