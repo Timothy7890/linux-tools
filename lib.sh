@@ -42,10 +42,10 @@ phase() {
 spinner() {
     local pid=$1 msg="$2"
     local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
-    local i=0
+    local i=0 start=$SECONDS
     tput civis 2>/dev/null
     while kill -0 "$pid" 2>/dev/null; do
-        printf "\r  ${CYAN}%s${NC} %s" "${frames[$i]}" "$msg"
+        printf "\r  ${CYAN}%s${NC} %s ${DIM}(%ds)${NC}" "${frames[$i]}" "$msg" $((SECONDS - start))
         i=$(( (i + 1) % ${#frames[@]} ))
         sleep 0.1
     done
@@ -542,11 +542,22 @@ deploy_yazi_viz() {
         PIP_ARGS=()
         PIP_ENV=(env)
     fi
-    if run_quiet "创建 venv" python3 -m venv "$VIZ_ENV" \
-        && run_quiet "升级 pip" "${PIP_ENV[@]}" "$VIZ_ENV/bin/pip" install -q "${PIP_ARGS[@]}" --upgrade pip \
-        && run_quiet "安装 ${VIZ_PKGS[*]}" "${PIP_ENV[@]}" "$VIZ_ENV/bin/pip" install -q "${PIP_ARGS[@]}" "${VIZ_PKGS[@]}"; then
+    if ! run_quiet "创建 venv" python3 -m venv "$VIZ_ENV" \
+        || ! run_quiet "升级 pip" "${PIP_ENV[@]}" "$VIZ_ENV/bin/pip" install -q "${PIP_ARGS[@]}" --upgrade pip; then
+        STATUS["Yazi 可视化"]="✘"
+        return 1
+    fi
+    # 逐个安装，显示 [i/N] 进度；已装过的包（被前面的依赖带进来）会很快跳过
+    local total=${#VIZ_PKGS[@]} i=0 pkg failed=()
+    for pkg in "${VIZ_PKGS[@]}"; do
+        i=$((i + 1))
+        run_quiet "[${i}/${total}] ${pkg}" "${PIP_ENV[@]}" "$VIZ_ENV/bin/pip" install -q "${PIP_ARGS[@]}" "$pkg" \
+            || failed+=("$pkg")
+    done
+    if [[ ${#failed[@]} -eq 0 ]]; then
         STATUS["Yazi 可视化"]="✔"
     else
+        warn "安装失败: ${failed[*]}，可检查网络后重跑 ./install.sh yazi"
         STATUS["Yazi 可视化"]="✘"
     fi
 }
