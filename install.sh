@@ -120,11 +120,17 @@ fi
 if want git; then
 # ---- Git ----
 step "Git"
+# 旧系统（< 22.04）自带 Git 太老才走 PPA；已升级过（≥ GIT_MIN_VER）则跳过，避免每次重跑都刷 PPA
+GIT_MIN_VER="2.34.0"   # Ubuntu 22.04 自带版本
 need_git_upgrade=false
 if [[ "$UBUNTU_VER" != "unknown" ]]; then
     ubuntu_major=$(echo "$UBUNTU_VER" | cut -d. -f1)
     if (( ubuntu_major < 22 )); then
-        need_git_upgrade=true
+        cur_git=$(git --version 2>/dev/null | awk '{print $3}')
+        if [[ -z "$cur_git" ]] ||
+            [[ "$(printf '%s\n%s\n' "$GIT_MIN_VER" "$cur_git" | sort -V | head -1)" != "$GIT_MIN_VER" ]]; then
+            need_git_upgrade=true
+        fi
     fi
 fi
 
