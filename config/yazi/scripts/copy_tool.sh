@@ -276,6 +276,49 @@ feature_copy() {
     done
     [ ${#plan_src[@]} -eq 0 ] && abort "所有子目录都找不到勾选的项，无事可做。" 3
 
+    # 目标结构：保留结构 / 平铺到同一层（平铺前必须确认无重名）
+    echo ""
+    echo "  目标结构："
+    echo "  1) 保留结构  $(basename "$dest")/${plan_rel[0]}   （默认，回车）"
+    echo "  2) 平铺一层  $(basename "$dest")/$(basename "${plan_rel[0]}")"
+    local layout_choice layout_desc="保留结构"
+    read -p "请选择 [1-2]: " layout_choice
+    if [ "$layout_choice" = "2" ]; then
+        layout_desc="平铺一层"
+        local flat=() r cnt_key dups=()
+        declare -A name_cnt name_from
+        for r in "${plan_rel[@]}"; do
+            cnt_key="$(basename "$r")"
+            name_cnt[$cnt_key]=$(( ${name_cnt[$cnt_key]:-0} + 1 ))
+            name_from[$cnt_key]+="${name_from[$cnt_key]:+、}$(dirname "$r")"
+        done
+        for cnt_key in "${!name_cnt[@]}"; do
+            [ "${name_cnt[$cnt_key]}" -gt 1 ] && dups+=("$cnt_key")
+        done
+        if [ ${#dups[@]} -gt 0 ]; then
+            echo ""
+            echo "  ⚠ 平铺后有 ${#dups[@]} 个名字重复，不能直接平铺："
+            local dshow=${#dups[@]}; [ "$dshow" -gt 20 ] && dshow=20
+            for ((k=0; k<dshow; k++)); do echo "      - ${dups[$k]}  ←  ${name_from[${dups[$k]}]}"; done
+            [ ${#dups[@]} -gt 20 ] && echo "      ... 其余 $(( ${#dups[@]} - 20 )) 个"
+            echo ""
+            echo "  p) 文件名加子目录名前缀（如 $(dirname "${plan_rel[0]}" | tr '/' '_')_$(basename "${plan_rel[0]}")）"
+            echo "  q) 取消（不做任何改动）"
+            local dup_ans
+            read -p "请选择 [p/q]: " dup_ans
+            [ "$dup_ans" = "p" ] || abort "已取消，未做任何改动"
+            layout_desc="平铺一层（加子目录名前缀）"
+            for r in "${plan_rel[@]}"; do flat+=("$(dirname "$r" | tr '/' '_')_$(basename "$r")"); done
+            # 加前缀后仍重名（极少见）则放弃
+            if [ "$(printf '%s\n' "${flat[@]}" | sort | uniq -d | head -1)" != "" ]; then
+                abort "加前缀后仍有重名，已取消，未做任何改动。" 4
+            fi
+        else
+            for r in "${plan_rel[@]}"; do flat+=("$(basename "$r")"); done
+        fi
+        plan_rel=("${flat[@]}")
+    fi
+
     # 预览
     echo ""
     echo "==============================="
@@ -288,6 +331,7 @@ feature_copy() {
         echo "  大文件夹  : $refbig"
     fi
     echo "  目标文件夹: $dest"
+    echo "  目标结构  : $layout_desc"
     echo "  勾选项    : ${patterns[*]}"
     echo "  待$verb项 : ${#plan_src[@]}"
     echo ""
