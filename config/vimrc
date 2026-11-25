@@ -1,0 +1,29 @@
+set number
+set clipboard=unnamed,unnamedplus
+
+syntax on
+filetype plugin indent on
+set t_Co=256
+set encoding=utf-8
+
+set autoindent
+set smartindent
+set tabstop=4
+set shiftwidth=4
+set expandtab
+set softtabstop=4
+
+" OSC 52 clipboard support (works over SSH / inside tmux)
+function! OSC52Copy()
+    let b64 = system('base64 | tr -d "\n"', getreg(v:event.regname))
+    let osc52 = "\e]52;c;" . b64 . "\x07"
+    if !empty($TMUX)
+        let osc52 = "\ePtmux;\e" . substitute(osc52, "\e", "\e\e", 'g') . "\e\\"
+    endif
+    silent! call writefile([osc52], '/dev/tty', 'b')
+endfunction
+
+augroup osc52
+    autocmd!
+    autocmd TextYankPost * if v:event.operator == 'y' | call OSC52Copy() | endif
+augroup END

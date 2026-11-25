@@ -1,0 +1,6 @@
+[[mgr.prepend_keymap]]
+on   = [ "g", "v" ]
+run  = '''
+    shell 'printf "%%s\n" %s > /tmp/yazi_viz_files && tmux split-window -h "bash ~/.config/yazi/scripts/visualize_web.sh"'
+'''
+desc = "Tmux 分屏 Web 可视化 transforms / masks"

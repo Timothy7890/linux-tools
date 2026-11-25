@@ -1,0 +1,15 @@
+[[mgr.prepend_keymap]]
+on   = [ "g", "l" ]
+run  = '''
+    shell '
+        cwd="$PWD"
+        todo_file="yazi_todo.yazi"
+        target=$(tmux new-window -c "$cwd" -P -F "#{window_id}")
+        if [ -f "$todo_file" ]; then
+            pre_cmd=$(cat "$todo_file")
+            sleep 0.3
+            tmux send-keys -t "$target" "$pre_cmd" C-m
+        fi
+    '
+'''
+desc = "精准锁定新窗口激活环境"

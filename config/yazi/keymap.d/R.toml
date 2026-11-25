@@ -1,0 +1,6 @@
+[[mgr.prepend_keymap]]
+on   = [ "R" ]
+run  = '''
+    shell 'printf "%%s\n" %s > /tmp/yazi_transfer_files && tmux split-window -h "bash ~/.config/yazi/scripts/transfer.sh"'
+'''
+desc = "Tmux 分屏传输"
